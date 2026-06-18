@@ -160,15 +160,17 @@ export function GameActive({
       const diff = Math.max(0, Math.ceil((timerEnds - now) / 1000));
       setTimeLeft(diff);
 
-      // Play warning ticks and vibrate in last 5 seconds (exactly once per second)
-      if (diff <= 5 && diff > 0 && diff !== lastTickSecond) {
+      // Play warning ticks and vibrate in the last few seconds (10s if STOP triggered, otherwise 5s)
+      const warningThreshold = room.stop_triggered_by ? 10 : 5;
+      if (diff <= warningThreshold && diff > 0 && diff !== lastTickSecond) {
         lastTickSecond = diff;
         audioHelper.playTick();
-        vibrate(100);
+        vibrate(80);
       }
 
       if (diff === 0) {
         clearInterval(intervalId);
+        vibrate([500, 200, 500]); // Buzzer vibration pattern
         
         // Auto-submit when timer expires
         if (!hasSubmittedRef.current) {

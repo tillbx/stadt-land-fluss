@@ -1,0 +1,17 @@
+{
+  "short_name": "Stadt Land Fluss",
+  "name": "Stadt Land Fluss Ultimate",
+  "description": "Das klassische Stadt-Land-Fluss Wortspiel mit Freunden live im Browser.",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "type": "image/svg+xml",
+      "sizes": "any"
+    }
+  ],
+  "start_url": "/",
+  "background_color": "#09090e",
+  "theme_color": "#9d4edd",
+  "display": "standalone",
+  "orientation": "portrait"
+}
