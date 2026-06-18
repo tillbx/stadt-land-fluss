@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from 'react';
-import { Timer, Send, ShieldAlert, ArrowLeft, ArrowRight } from 'lucide-react';
+import { Timer, Send, ShieldAlert } from 'lucide-react';
 import type { RoomRecord, PlayerRecord, AnswerRecord } from '../hooks/useGameRoom';
 import { audioHelper } from '../utils/AudioHelper';
 import { PlayerAvatar } from './PlayerAvatar';
@@ -53,12 +53,7 @@ export function GameActive({
   const [isGracePeriod, setIsGracePeriod] = useState(false);
   const [isSelectingJoker, setIsSelectingJoker] = useState(false);
 
-  const [activeCategoryIndex, setActiveCategoryIndex] = useState(0);
-  const [isMobile, setIsMobile] = useState(false);
   const [jokerCategories, setJokerCategories] = useState<string[]>([]);
-
-  const touchStartX = useRef<number | null>(null);
-  const touchStartY = useRef<number | null>(null);
 
   const answersStateRef = useRef(answersState);
   const hasSubmittedRef = useRef(hasSubmitted);
@@ -78,15 +73,7 @@ export function GameActive({
     lastStopTriggeredBy.current = room.stop_triggered_by;
   }, [room.stop_triggered_by]);
 
-  // Screen size listener to toggle desktop/mobile modes dynamically
-  useEffect(() => {
-    const checkMobile = () => {
-      setIsMobile(window.innerWidth <= 650);
-    };
-    checkMobile();
-    window.addEventListener('resize', checkMobile);
-    return () => window.removeEventListener('resize', checkMobile);
-  }, []);
+
 
   // Wake Lock API to prevent screen sleep during gameplay
   useEffect(() => {
@@ -260,9 +247,6 @@ export function GameActive({
       e.preventDefault();
       if (catIndex < categories.length - 1) {
         const nextCat = categories[catIndex + 1];
-        if (window.innerWidth <= 650) {
-          setActiveCategoryIndex(catIndex + 1);
-        }
         const nextInput = document.getElementById(`input-${nextCat}`) as HTMLInputElement | null;
         if (nextInput) {
           nextInput.focus();
@@ -271,43 +255,6 @@ export function GameActive({
         handleStopClick();
       }
     }
-  };
-
-  const handleTouchStart = (e: React.TouchEvent) => {
-    touchStartX.current = e.touches[0].clientX;
-    touchStartY.current = e.touches[0].clientY;
-  };
-
-  const handleTouchEnd = (e: React.TouchEvent) => {
-    if (touchStartX.current === null || touchStartY.current === null) return;
-    const diffX = touchStartX.current - e.changedTouches[0].clientX;
-    const diffY = touchStartY.current - e.changedTouches[0].clientY;
-
-    if (Math.abs(diffX) > 60 && Math.abs(diffY) < 40) {
-      if (diffX > 0) {
-        // Swiped left -> next category
-        if (activeCategoryIndex < categories.length - 1) {
-          const nextIdx = activeCategoryIndex + 1;
-          setActiveCategoryIndex(nextIdx);
-          setTimeout(() => {
-            const nextInput = document.getElementById(`input-${categories[nextIdx]}`) as HTMLInputElement | null;
-            if (nextInput) nextInput.focus();
-          }, 100);
-        }
-      } else {
-        // Swiped right -> prev category
-        if (activeCategoryIndex > 0) {
-          const prevIdx = activeCategoryIndex - 1;
-          setActiveCategoryIndex(prevIdx);
-          setTimeout(() => {
-            const prevInput = document.getElementById(`input-${categories[prevIdx]}`) as HTMLInputElement | null;
-            if (prevInput) prevInput.focus();
-          }, 100);
-        }
-      }
-    }
-    touchStartX.current = null;
-    touchStartY.current = null;
   };
 
   // Check which players have submitted
@@ -428,254 +375,96 @@ export function GameActive({
         </div>
       )}
 
-      {/* Main Categories Layout (List on Desktop, Slide Track Carousel on Mobile) */}
+      {/* Main Categories Layout (List on all screen sizes) */}
       <div style={{ width: '100%' }}>
-        {!isMobile ? (
-          <div className="game-grid" style={{ maxWidth: '100%' }}>
-            {categories.map((cat, idx) => (
-              <div key={cat} className="category-row">
-                <label
-                  className={`category-title ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable-label' : ''}`}
-                  htmlFor={isSelectingJoker ? undefined : `input-${cat}`}
-                  onClick={(e) => {
+        <div className="game-grid" style={{ maxWidth: '100%' }}>
+          {categories.map((cat, idx) => (
+            <div key={cat} className="category-row">
+              <label
+                className={`category-title ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable-label' : ''}`}
+                htmlFor={isSelectingJoker ? undefined : `input-${cat}`}
+                onClick={(e) => {
+                  if (isSelectingJoker) {
+                    e.preventDefault();
+                    applyJoker(cat);
+                  }
+                }}
+              >
+                {cat}
+              </label>
+              <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
+                <input
+                  id={`input-${cat}`}
+                  type="text"
+                  className={`category-input ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable' : ''}`}
+                  style={{ flex: 1 }}
+                  placeholder={
+                    isSelectingJoker && !jokerCategories.includes(cat)
+                      ? 'Hier tippen für Joker...'
+                      : `${room.current_letter}...`
+                  }
+                  value={answersState[cat]}
+                  onChange={(e) => handleInputChange(cat, e.target.value)}
+                  onKeyDown={(e) => handleKeyDown(idx, e)}
+                  onFocus={(e) => {
                     if (isSelectingJoker) {
-                      e.preventDefault();
+                      e.target.blur();
                       applyJoker(cat);
                     }
                   }}
-                >
-                  {cat}
-                </label>
-                <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
-                  <input
-                    id={`input-${cat}`}
-                    type="text"
-                    className={`category-input ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable' : ''}`}
-                    style={{ flex: 1 }}
-                    placeholder={
-                      isSelectingJoker && !jokerCategories.includes(cat)
-                        ? 'Hier tippen für Joker...'
-                        : `${room.current_letter}...`
+                  onClick={(e) => {
+                    if (isSelectingJoker) {
+                      e.preventDefault();
+                      e.stopPropagation();
+                      applyJoker(cat);
                     }
-                    value={answersState[cat]}
-                    onChange={(e) => handleInputChange(cat, e.target.value)}
-                    onKeyDown={(e) => handleKeyDown(idx, e)}
-                    onFocus={(e) => {
-                      if (isSelectingJoker) {
-                        e.target.blur();
-                        applyJoker(cat);
-                      }
-                    }}
-                    onClick={(e) => {
-                      if (isSelectingJoker) {
-                        e.preventDefault();
-                        e.stopPropagation();
-                        applyJoker(cat);
-                      }
-                    }}
-                    disabled={hasSubmitted || jokerCategories.includes(cat)}
-                    autoComplete="off"
-                    maxLength={40}
-                    enterKeyHint={idx < categories.length - 1 ? 'next' : 'send'}
-                  />
-                  {jokerCategories.includes(cat) && (
-                    <div style={{
-                      display: 'flex',
-                      alignItems: 'center',
-                      background: 'var(--primary-glow)',
-                      border: '1px solid var(--primary)',
-                      borderRadius: 'var(--radius-sm)',
-                      padding: '0 0.6rem',
-                      fontSize: '0.8rem',
-                      color: 'var(--text-main)',
-                      fontWeight: 600,
-                      gap: '0.2rem',
-                      height: '46px',
-                      userSelect: 'none'
-                    }}>
-                      <span>🃏</span>
-                      <span>Joker</span>
-                    </div>
-                  )}
-                </div>
-              </div>
-            ))}
-
-            {/* Action button */}
-            <button
-              className="btn btn-primary"
-              onClick={handleStopClick}
-              disabled={hasSubmitted}
-              style={{
-                gridColumn: '1 / -1',
-                padding: '1.2rem',
-                fontSize: '1.3rem',
-                marginTop: '1rem',
-                boxShadow: hasSubmitted ? 'none' : '0 6px 25px var(--primary-glow)',
-                background: hasSubmitted ? 'var(--bg-card)' : 'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
-              }}
-            >
-              <Send size={20} />
-              {hasSubmitted ? 'Antworten abgegeben!' : 'Ich bin fertig! / STOPP'}
-            </button>
-          </div>
-        ) : (
-          <div style={{ width: '100%' }}>
-            {/* Horizontal scrollable tab capsules for overview */}
-            <div className="category-tabs-container">
-              {categories.map((cat, idx) => {
-                const hasValue = !!answersState[cat]?.trim();
-                const isActive = idx === activeCategoryIndex;
-                return (
-                  <button
-                    key={cat}
-                    className={`category-tab-pill ${isActive ? 'active' : ''} ${hasValue ? 'completed' : ''}`}
-                    onClick={() => {
-                      setActiveCategoryIndex(idx);
-                      setTimeout(() => {
-                        const nextInput = document.getElementById(`input-${cat}`) as HTMLInputElement | null;
-                        if (nextInput) nextInput.focus();
-                      }, 100);
-                    }}
-                    type="button"
-                  >
-                    <span className="tab-pill-number">{idx + 1}</span>
-                    <span className="tab-pill-text">{cat}</span>
-                    {hasValue && <span className="tab-pill-check">✓</span>}
-                  </button>
-                );
-              })}
-            </div>
-
-            {/* Slide Viewport and Track */}
-            <div 
-              className="slide-viewport"
-              onTouchStart={handleTouchStart}
-              onTouchEnd={handleTouchEnd}
-            >
-              <div 
-                className="slide-track" 
-                style={{ transform: `translateX(-${activeCategoryIndex * 100}%)` }}
-              >
-                {categories.map((cat, idx) => (
-                  <div key={cat} className="slide-item">
-                    <div className="mobile-category-card">
-                      <label
-                        className={`mobile-category-label ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable-label' : ''}`}
-                        htmlFor={isSelectingJoker ? undefined : `input-${cat}`}
-                        onClick={(e) => {
-                          if (isSelectingJoker) {
-                            e.preventDefault();
-                            applyJoker(cat);
-                          }
-                        }}
-                      >
-                        {cat}
-                      </label>
-                      <div style={{ display: 'flex', gap: '0.5rem', width: '100%' }}>
-                        <input
-                          id={`input-${cat}`}
-                          type="text"
-                          className={`mobile-category-input ${isSelectingJoker && !jokerCategories.includes(cat) ? 'joker-selectable' : ''}`}
-                          style={{ flex: 1 }}
-                          placeholder={
-                            isSelectingJoker && !jokerCategories.includes(cat)
-                              ? 'Hier tippen für Joker...'
-                              : `${room.current_letter}...`
-                          }
-                          value={answersState[cat]}
-                          onChange={(e) => handleInputChange(cat, e.target.value)}
-                          onKeyDown={(e) => handleKeyDown(idx, e)}
-                          onFocus={(e) => {
-                            if (isSelectingJoker) {
-                              e.target.blur();
-                              applyJoker(cat);
-                            }
-                          }}
-                          onClick={(e) => {
-                            if (isSelectingJoker) {
-                              e.preventDefault();
-                              e.stopPropagation();
-                              applyJoker(cat);
-                            }
-                          }}
-                          disabled={hasSubmitted || jokerCategories.includes(cat)}
-                          autoComplete="off"
-                          maxLength={40}
-                          enterKeyHint={idx < categories.length - 1 ? 'next' : 'send'}
-                        />
-                        {jokerCategories.includes(cat) && (
-                          <div style={{
-                            display: 'flex',
-                            alignItems: 'center',
-                            background: 'var(--primary-glow)',
-                            border: '1px solid var(--primary)',
-                            borderRadius: 'var(--radius-sm)',
-                            padding: '0 0.5rem',
-                            fontSize: '0.75rem',
-                            color: 'var(--text-main)',
-                            fontWeight: 600,
-                            gap: '0.15rem',
-                            height: '42px',
-                            userSelect: 'none'
-                          }}>
-                            <span>🃏</span>
-                            <span>Joker</span>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            {/* Navigation Controls */}
-            <div className="mobile-slide-nav">
-              <button
-                className="btn btn-secondary btn-nav"
-                disabled={activeCategoryIndex === 0}
-                onClick={() => {
-                  const prevIdx = activeCategoryIndex - 1;
-                  setActiveCategoryIndex(prevIdx);
-                  setTimeout(() => {
-                    const prevInput = document.getElementById(`input-${categories[prevIdx]}`) as HTMLInputElement | null;
-                    if (prevInput) prevInput.focus();
-                  }, 100);
-                }}
-                type="button"
-              >
-                <ArrowLeft size={16} /> Zurück
-              </button>
-              
-              {activeCategoryIndex < categories.length - 1 ? (
-                <button
-                  className="btn btn-primary btn-nav"
-                  onClick={() => {
-                    const nextIdx = activeCategoryIndex + 1;
-                    setActiveCategoryIndex(nextIdx);
-                    setTimeout(() => {
-                      const nextInput = document.getElementById(`input-${categories[nextIdx]}`) as HTMLInputElement | null;
-                      if (nextInput) nextInput.focus();
-                    }, 100);
                   }}
-                  type="button"
-                >
-                  Weiter <ArrowRight size={16} />
-                </button>
-              ) : (
-                <button
-                  className="btn btn-primary btn-nav submit-nav"
-                  onClick={handleStopClick}
-                  disabled={hasSubmitted}
-                  type="button"
-                >
-                  <Send size={16} /> STOPP
-                </button>
-              )}
+                  disabled={hasSubmitted || jokerCategories.includes(cat)}
+                  autoComplete="off"
+                  maxLength={40}
+                  enterKeyHint={idx < categories.length - 1 ? 'next' : 'send'}
+                />
+                {jokerCategories.includes(cat) && (
+                  <div style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    background: 'var(--primary-glow)',
+                    border: '1px solid var(--primary)',
+                    borderRadius: 'var(--radius-sm)',
+                    padding: '0 0.6rem',
+                    fontSize: '0.8rem',
+                    color: 'var(--text-main)',
+                    fontWeight: 600,
+                    gap: '0.2rem',
+                    height: '46px',
+                    userSelect: 'none'
+                  }}>
+                    <span>🃏</span>
+                    <span>Joker</span>
+                  </div>
+                )}
+              </div>
             </div>
-          </div>
-        )}
+          ))}
+
+          {/* Action button */}
+          <button
+            className="btn btn-primary"
+            onClick={handleStopClick}
+            disabled={hasSubmitted}
+            style={{
+              gridColumn: '1 / -1',
+              padding: '1.2rem',
+              fontSize: '1.3rem',
+              marginTop: '1rem',
+              boxShadow: hasSubmitted ? 'none' : '0 6px 25px var(--primary-glow)',
+              background: hasSubmitted ? 'var(--bg-card)' : 'linear-gradient(135deg, var(--primary) 0%, var(--secondary) 100%)',
+            }}
+          >
+            <Send size={20} />
+            {hasSubmitted ? 'Antworten abgegeben!' : 'Ich bin fertig! / STOPP'}
+          </button>
+        </div>
       </div>
     </div>
   );

@@ -1001,10 +1001,10 @@ h1, h2, h3, h4 {
 
 .game-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(460px, 1fr));
+  grid-template-columns: 1fr;
   gap: 1.2rem;
   width: 100%;
-  max-width: 1050px;
+  max-width: 650px; /* Centered compact single column layout */
   margin-bottom: 2.5rem;
 }
 

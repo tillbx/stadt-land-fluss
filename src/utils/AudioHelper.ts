@@ -152,7 +152,7 @@ class AudioHelper {
       const ctx = this.initCtx();
       const now = ctx.currentTime;
       const notes = [659.25, 987.77]; // E5, B5
-      notes.forEach((freq, idx) => {
+      notes.forEach((freq) => {
         const osc = ctx.createOscillator();
         const gain = ctx.createGain();
         osc.connect(gain);

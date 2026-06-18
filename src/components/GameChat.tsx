@@ -36,7 +36,7 @@ export function GameChat({
   const isSomeoneTyping = typingPlayers.length > 0;
 
   // Typing indicator debounce
-  const typingTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const typingTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => {
     if (!onSetTypingStatus) return;
