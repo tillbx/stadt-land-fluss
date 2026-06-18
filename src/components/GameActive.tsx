@@ -3,7 +3,6 @@ import { Timer, Send, ShieldAlert } from 'lucide-react';
 import type { RoomRecord, PlayerRecord, AnswerRecord } from '../hooks/useGameRoom';
 import { audioHelper } from '../utils/AudioHelper';
 import { PlayerAvatar } from './PlayerAvatar';
-import { getRandomWord } from '../utils/WordDictionary';
 
 interface GameActiveProps {
   room: RoomRecord;
@@ -198,20 +197,15 @@ export function GameActive({
     if (hasSubmitted || remainingJokers <= 0) return;
     if (jokerCategories.includes(cat)) return; // already has a joker
     
-    const word = getRandomWord(cat, room.current_letter);
-    if (word) {
-      audioHelper.playClick();
-      vibrate(100);
-      setAnswersState((prev) => ({
-        ...prev,
-        [cat]: word,
-      }));
-      setJokerCategories((prev) => [...prev, cat]);
-      onUseJoker();
-      setIsSelectingJoker(false);
-    } else {
-      alert(`Kein Wort für "${cat}" mit dem Buchstaben "${room.current_letter}" gefunden.`);
-    }
+    audioHelper.playClick();
+    vibrate(100);
+    setAnswersState((prev) => ({
+      ...prev,
+      [cat]: '🃏 Joker',
+    }));
+    setJokerCategories((prev) => [...prev, cat]);
+    onUseJoker();
+    setIsSelectingJoker(false);
   };
 
   const handleAutoSubmit = async () => {

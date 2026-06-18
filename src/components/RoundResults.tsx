@@ -592,12 +592,7 @@ export function RoundResults({
                           <div>
                             <div className="breakdown-cat-name">{cat}</div>
                             <div style={{ fontWeight: 600, fontSize: '0.95rem', color: ansText ? 'var(--text-main)' : 'rgba(255,255,255,0.2)', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
-                              {ansText || 'Keine Antwort'}
-                              {usedJoker && (
-                                <span style={{ fontSize: '0.75rem', color: 'var(--accent)', fontWeight: 'bold' }} title="Joker benutzt">
-                                  🃏 Joker
-                                </span>
-                              )}
+                              {usedJoker ? '🃏 Joker' : (ansText || 'Keine Antwort')}
                             </div>
                           </div>
                           <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem' }}>

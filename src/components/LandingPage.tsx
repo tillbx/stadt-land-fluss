@@ -889,12 +889,7 @@ export function LandingPage({
                             alignItems: 'center',
                             gap: '0.3rem'
                           }}>
-                            {ansText || 'Keine Antwort'}
-                            {usedJoker && (
-                              <span style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 'bold' }}>
-                                🃏 Joker
-                              </span>
-                            )}
+                            {usedJoker ? '🃏 Joker' : (ansText || 'Keine Antwort')}
                           </span>
                         </div>
 

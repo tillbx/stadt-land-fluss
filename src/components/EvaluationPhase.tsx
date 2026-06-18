@@ -176,12 +176,7 @@ function EvaluationRow({
       {/* Answer Text */}
       {hasAnswer ? (
         <span className="eval-answer-text">
-          {rawAnswer}
-          {usedJoker && (
-            <span style={{ fontSize: '0.75rem', color: 'var(--accent)', marginLeft: '0.5rem', fontWeight: 'bold' }}>
-              🃏 Joker benutzt
-            </span>
-          )}
+          {usedJoker ? '🃏 Joker' : rawAnswer}
           {autoInvalid && !usedJoker && (
             <span style={{ fontSize: '0.75rem', color: 'var(--danger)', marginLeft: '0.5rem', fontWeight: 'normal' }}>
               (Falscher Anfangsbuchstabe)
