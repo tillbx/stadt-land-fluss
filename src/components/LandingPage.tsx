@@ -2,17 +2,36 @@ import React, { useState, useEffect } from 'react';
 import { LogIn, Sparkles, History, Trophy, User, LogOut, Camera, Mail, Lock } from 'lucide-react';
 import { audioHelper } from '../utils/AudioHelper';
 import { pb } from '../pocketbase';
+import { AVATAR_PRESETS } from '../utils/AvatarPresets';
+import { PlayerAvatar } from './PlayerAvatar';
+import { AvatarPicker } from './AvatarPicker';
+import { containsBadWords } from '../utils/WordCensor';
+
+const THEMES = [
+  { id: 'default', name: 'Sleek Dark', color: 'linear-gradient(135deg, #6366f1, #ec4899)' },
+  { id: 'cyberpunk', name: 'Cyberpunk', color: 'linear-gradient(135deg, #00ff66, #ff007f)' },
+  { id: 'slate', name: 'Slate', color: 'linear-gradient(135deg, #94a3b8, #475569)' },
+  { id: 'emerald', name: 'Emerald', color: 'linear-gradient(135deg, #10b981, #047857)' },
+  { id: 'sunset', name: 'Sunset', color: 'linear-gradient(135deg, #f97316, #ec4899)' },
+  { id: 'ocean', name: 'Ocean Wave', color: 'linear-gradient(135deg, #0ea5e9, #14b8a6)' },
+  { id: 'vaporwave', name: 'Vaporwave', color: 'linear-gradient(135deg, #d946ef, #06b6d4)' },
+  { id: 'gold', name: 'Carbon Gold', color: 'linear-gradient(135deg, #fbbf24, #f97316)' },
+  { id: 'aurora', name: 'Aurora', color: 'linear-gradient(135deg, #10b981, #8b5cf6)' },
+  { id: 'lavender', name: 'Lavender', color: 'linear-gradient(135deg, #a78bfa, #f43f5e)' },
+];
 
 interface LandingPageProps {
-  onCreateRoom: (name: string, customCategories?: string[]) => void;
-  onJoinRoom: (roomId: string, name: string) => void;
+  onCreateRoom: (name: string, customCategories?: string[], avatar?: string) => void;
+  onJoinRoom: (roomId: string, name: string, avatar?: string) => void;
   isConnecting: boolean;
   error: string | null;
   user: any;
-  onRegister: (email: string, password: string, displayName?: string, avatarFile?: File | null) => Promise<void>;
+  onRegister: (email: string, password: string, displayName?: string, avatarFile?: File | null, presetAvatar?: string) => Promise<void>;
   onLogin: (email: string, password: string) => Promise<void>;
   onLogout: () => void;
-  onUpdateProfile: (displayName: string, avatarFile: File | null) => Promise<any>;
+  onUpdateProfile: (displayName: string, avatarFile: File | null, presetAvatar?: string) => Promise<any>;
+  activeTheme: string;
+  onUpdateTheme: (themeName: string) => void;
 }
 
 export function LandingPage({
@@ -24,7 +43,9 @@ export function LandingPage({
   onRegister,
   onLogin,
   onLogout,
-  onUpdateProfile
+  onUpdateProfile,
+  activeTheme,
+  onUpdateTheme
 }: LandingPageProps) {
   // Common state
   const [name, setName] = useState(() => localStorage.getItem('slf_player_name') || '');
@@ -55,12 +76,19 @@ export function LandingPage({
   const [updateSuccess, setUpdateSuccess] = useState(false);
   const [updateLoading, setUpdateLoading] = useState(false);
 
+  // Preset states for LandingPage
+  const [selectedPreset, setSelectedPreset] = useState<string | null>(null);
+  const [authPreset, setAuthPreset] = useState<string | null>(null);
+  const [updatePreset, setUpdatePreset] = useState<string | null>(null);
+
   // Dashboard state
   const [activeDashboardTab, setActiveDashboardTab] = useState<'stats' | 'history' | 'leaderboard'>('stats');
   const [historyList, setHistoryList] = useState<any[]>([]);
   const [historyLoading, setHistoryLoading] = useState(false);
   const [leaderboardList, setLeaderboardList] = useState<any[]>([]);
   const [leaderboardLoading, setLeaderboardLoading] = useState(false);
+  const [selectedMatch, setSelectedMatch] = useState<any | null>(null);
+  const [selectedRound, setSelectedRound] = useState<number>(1);
 
   // Extract room code from URL hash (e.g., #ROOMCODE)
   useEffect(() => {
@@ -81,6 +109,11 @@ export function LandingPage({
         localStorage.setItem('slf_player_name', displayName);
       }
       setUpdateName(user.name || '');
+      const userPreset = user.preset_avatar && user.preset_avatar.startsWith('preset_') ? user.preset_avatar : null;
+      setUpdatePreset(userPreset);
+      if (userPreset) {
+        setSelectedPreset(userPreset);
+      }
     }
   }, [user]);
 
@@ -103,6 +136,37 @@ export function LandingPage({
     }
     setUpdateAvatarPreview(null);
   }, [updateAvatar]);
+
+  // Assign a saved preset or random preset avatar on mount if none is selected
+  useEffect(() => {
+    if (!selectedPreset) {
+      const savedPreset = localStorage.getItem('slf_player_avatar');
+      if (savedPreset && AVATAR_PRESETS.some(p => p.id === savedPreset)) {
+        setSelectedPreset(savedPreset);
+      } else {
+        const randomPreset = AVATAR_PRESETS[Math.floor(Math.random() * AVATAR_PRESETS.length)];
+        setSelectedPreset(randomPreset.id);
+        localStorage.setItem('slf_player_avatar', randomPreset.id);
+      }
+    }
+  }, [selectedPreset]);
+
+  const handlePresetSelect = (id: string) => {
+    setSelectedPreset(id);
+    localStorage.setItem('slf_player_avatar', id);
+  };
+
+  // For registration mode random assignment
+  useEffect(() => {
+    if (isRegisterMode && !authPreset && !authAvatar) {
+      if (selectedPreset) {
+        setAuthPreset(selectedPreset);
+      } else {
+        const randomPreset = AVATAR_PRESETS[Math.floor(Math.random() * AVATAR_PRESETS.length)];
+        setAuthPreset(randomPreset.id);
+      }
+    }
+  }, [isRegisterMode, authPreset, authAvatar, selectedPreset]);
 
   const loadHistory = async () => {
     if (!user) return;
@@ -139,6 +203,8 @@ export function LandingPage({
   useEffect(() => {
     if (user) {
       if (activeDashboardTab === 'history') {
+        setSelectedMatch(null);
+        setSelectedRound(1);
         loadHistory();
       } else if (activeDashboardTab === 'leaderboard') {
         loadLeaderboard();
@@ -156,14 +222,85 @@ export function LandingPage({
     e.preventDefault();
     if (!name.trim()) return;
     audioHelper.playClick();
-    onCreateRoom(name.trim(), undefined);
+    const effectiveAvatar = user 
+      ? (user.preset_avatar || user.avatar || undefined) 
+      : (selectedPreset || undefined);
+    onCreateRoom(name.trim(), undefined, effectiveAvatar);
   };
 
   const handleJoin = (e: React.FormEvent) => {
     e.preventDefault();
     if (!name.trim() || !roomCode.trim()) return;
     audioHelper.playClick();
-    onJoinRoom(roomCode.trim().toUpperCase(), name.trim());
+    const effectiveAvatar = user 
+      ? (user.preset_avatar || user.avatar || undefined) 
+      : (selectedPreset || undefined);
+    onJoinRoom(roomCode.trim().toUpperCase(), name.trim(), effectiveAvatar);
+  };
+
+  const getPocketBaseErrorMessage = (err: any): string => {
+    if (err && err.data && err.data.data) {
+      const data = err.data.data;
+      const errors: string[] = [];
+      Object.entries(data).forEach(([key, val]: any) => {
+        let fieldName = key;
+        if (key === 'password') fieldName = 'Passwort';
+        if (key === 'email') fieldName = 'E-Mail';
+        if (key === 'name') fieldName = 'Spielername';
+        errors.push(`${fieldName}: ${val.message || JSON.stringify(val)}`);
+      });
+      if (errors.length > 0) {
+        return `Registrierungsfehler - ${errors.join(', ')}`;
+      }
+    }
+    if (err && err.message) {
+      if (err.message.includes('validation_len_out_of_range')) {
+        return 'Das Passwort muss mindestens 8 Zeichen lang sein.';
+      }
+      return err.message;
+    }
+    return 'Authentifizierung fehlgeschlagen.';
+  };
+
+  const handleOneTapGuestLogin = async () => {
+    audioHelper.playClick();
+    setAuthError(null);
+    setAuthLoading(true);
+    try {
+      const savedEmail = localStorage.getItem('slf_guest_email');
+      const savedPassword = localStorage.getItem('slf_guest_password');
+      
+      if (savedEmail && savedPassword) {
+        try {
+          await onLogin(savedEmail, savedPassword);
+          setAuthTab('guest'); // Reset logged out tabs
+          return;
+        } catch (err) {
+          console.warn('Saved guest login failed, creating new one:', err);
+          localStorage.removeItem('slf_guest_email');
+          localStorage.removeItem('slf_guest_password');
+        }
+      }
+
+      // Generate new anonymous guest account
+      const rand = Math.floor(100000 + Math.random() * 900000);
+      const email = `guest_${rand}@stadtlandfluss.local`;
+      const password = `pass_${rand}_guest`;
+      const displayName = `Gast ${rand}`;
+      const presetAvatar = `preset_${Math.floor(Math.random() * 150) + 1}`; // choose a random avatar preset
+
+      // Register and login
+      await onRegister(email, password, displayName, null, presetAvatar);
+      
+      localStorage.setItem('slf_guest_email', email);
+      localStorage.setItem('slf_guest_password', password);
+      localStorage.setItem('slf_player_avatar', presetAvatar);
+      setAuthTab('guest'); // Reset logged out tabs
+    } catch (err: any) {
+      setAuthError(getPocketBaseErrorMessage(err));
+    } finally {
+      setAuthLoading(false);
+    }
   };
 
   const handleAuthSubmit = async (e: React.FormEvent) => {
@@ -172,7 +309,29 @@ export function LandingPage({
     setAuthLoading(true);
     try {
       if (isRegisterMode) {
-        await onRegister(authEmail.trim(), authPassword, authName.trim(), authAvatar);
+        const trimmedName = authName.trim();
+        if (!trimmedName) {
+          setAuthError('Bitte gib einen Spielernamen ein.');
+          setAuthLoading(false);
+          return;
+        }
+
+        // Validate character set (only numbers and German letters, no spaces/special chars)
+        const isValidChars = /^[a-zA-Z0-9äöüÄÖÜß]+$/.test(trimmedName);
+        if (!isValidChars) {
+          setAuthError('Der Name darf nur Zahlen und deutsche Buchstaben enthalten (keine Leerzeichen oder Sonderzeichen).');
+          setAuthLoading(false);
+          return;
+        }
+
+        // Validate profanity
+        if (containsBadWords(trimmedName)) {
+          setAuthError('Dieser Name enthält nicht erlaubte Wörter.');
+          setAuthLoading(false);
+          return;
+        }
+
+        await onRegister(authEmail.trim(), authPassword, trimmedName, authAvatar, authPreset || undefined);
       } else {
         await onLogin(authEmail.trim(), authPassword);
       }
@@ -180,9 +339,10 @@ export function LandingPage({
       setAuthPassword('');
       setAuthName('');
       setAuthAvatar(null);
+      setAuthPreset(null);
       setAuthTab('guest'); // Reset logged out tabs
     } catch (err: any) {
-      setAuthError(err.message || 'Authentifizierung fehlgeschlagen.');
+      setAuthError(getPocketBaseErrorMessage(err));
     } finally {
       setAuthLoading(false);
     }
@@ -194,11 +354,33 @@ export function LandingPage({
     setUpdateSuccess(false);
     setUpdateLoading(true);
     try {
-      await onUpdateProfile(updateName.trim(), updateAvatar);
+      const trimmedName = updateName.trim();
+      if (!trimmedName) {
+        setUpdateError('Bitte gib einen Spielernamen ein.');
+        setUpdateLoading(false);
+        return;
+      }
+
+      // Validate character set (only numbers and German letters, no spaces/special chars)
+      const isValidChars = /^[a-zA-Z0-9äöüÄÖÜß]+$/.test(trimmedName);
+      if (!isValidChars) {
+        setUpdateError('Der Name darf nur Zahlen und deutsche Buchstaben enthalten (keine Leerzeichen oder Sonderzeichen).');
+        setUpdateLoading(false);
+        return;
+      }
+
+      // Validate profanity
+      if (containsBadWords(trimmedName)) {
+        setUpdateError('Dieser Name enthält nicht erlaubte Wörter.');
+        setUpdateLoading(false);
+        return;
+      }
+
+      await onUpdateProfile(trimmedName, updateAvatar, updatePreset || undefined);
       setUpdateSuccess(true);
       setUpdateAvatar(null);
     } catch (err: any) {
-      setUpdateError(err.message || 'Profil-Update fehlgeschlagen.');
+      setUpdateError(getPocketBaseErrorMessage(err));
     } finally {
       setUpdateLoading(false);
     }
@@ -240,6 +422,17 @@ export function LandingPage({
     return '';
   };
 
+  const renderPresetPicker = (selectedId: string | null, onSelect: (id: string) => void) => {
+    return (
+      <div className="preset-picker-container" style={{ margin: '0.5rem 0 1rem 0', width: '100%' }}>
+        <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '0.4rem', display: 'block' }}>
+          Oder wähle einen Preset-Avatar:
+        </label>
+        <AvatarPicker selectedId={selectedId} onSelect={onSelect} />
+      </div>
+    );
+  };
+
   // Renders the registration/login form explicitly
   const renderAuthForms = () => {
     return (
@@ -247,6 +440,38 @@ export function LandingPage({
         <h3 style={{ textShadow: '0 0 10px var(--primary-glow)', color: 'var(--primary)', fontWeight: 800, fontSize: '1.2rem', marginBottom: '0.2rem', textAlign: 'center' }}>
           {isRegisterMode ? 'Konto erstellen' : 'Im Account anmelden'}
         </h3>
+
+        {/* One-Tap Gast-Login Button */}
+        <button
+          type="button"
+          onClick={handleOneTapGuestLogin}
+          disabled={authLoading}
+          className="btn btn-secondary"
+          style={{
+            width: '100%',
+            borderColor: 'var(--accent)',
+            background: 'var(--accent-glow)',
+            boxShadow: '0 4px 15px rgba(0, 168, 204, 0.12)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            gap: '0.5rem',
+            padding: '0.75rem',
+            fontWeight: 700,
+            fontSize: '0.9rem',
+            borderRadius: 'var(--radius-md)',
+            cursor: 'pointer'
+          }}
+        >
+          <Sparkles size={16} />
+          {authLoading ? 'Lade Gast-Account...' : 'Blitz-Gast-Login (One-Tap)'}
+        </button>
+
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '0.2rem 0' }}>
+          <hr style={{ flex: 1, border: 'none', borderTop: '1px solid var(--border-glass)' }} />
+          <span style={{ fontSize: '0.7rem', color: 'var(--text-muted)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>oder klassisch</span>
+          <hr style={{ flex: 1, border: 'none', borderTop: '1px solid var(--border-glass)' }} />
+        </div>
         
         {authError && (
           <div style={{ background: 'var(--danger-glow)', border: '1px solid var(--danger)', padding: '0.8rem', borderRadius: 'var(--radius-md)', color: 'var(--danger)', fontSize: '0.85rem', textAlign: 'center' }}>
@@ -269,12 +494,27 @@ export function LandingPage({
                 overflow: 'hidden',
                 background: 'rgba(255,255,255,0.02)',
                 boxShadow: '0 0 15px var(--primary-glow)',
-                cursor: 'pointer'
+                cursor: 'pointer',
+                position: 'relative'
               }}>
+                {authPreset && (
+                  <div style={{
+                    position: 'absolute',
+                    top: 0,
+                    left: 0,
+                    right: 0,
+                    bottom: 0,
+                    background: AVATAR_PRESETS.find(p => p.id === authPreset)?.gradient,
+                    borderRadius: '50%',
+                    zIndex: -1
+                  }} />
+                )}
                 {avatarPreview ? (
                   <img src={avatarPreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                ) : authPreset ? (
+                  <span style={{ fontSize: '2.2rem', zIndex: 1 }}>{AVATAR_PRESETS.find(p => p.id === authPreset)?.emoji}</span>
                 ) : (
-                  <Camera size={26} color="var(--primary)" />
+                  <Camera size={26} color="var(--primary)" style={{ zIndex: 1 }} />
                 )}
               </div>
               <input
@@ -283,6 +523,7 @@ export function LandingPage({
                 onChange={(e) => {
                   if (e.target.files && e.target.files.length > 0) {
                     setAuthAvatar(e.target.files[0]);
+                    setAuthPreset(null);
                   }
                 }}
                 style={{
@@ -298,6 +539,13 @@ export function LandingPage({
               />
             </div>
             <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>Profilbild hochladen (optional)</span>
+
+            {/* Preset Avatar Selection Scroll */}
+            {renderPresetPicker(authPreset, (id) => {
+              setAuthPreset(id);
+              setAuthAvatar(null);
+              setAvatarPreview(null);
+            })}
 
             <div className="form-group" style={{ width: '100%', textAlign: 'left' }}>
               <label className="form-label">Spielername (Anzeigename)</label>
@@ -474,6 +722,207 @@ export function LandingPage({
     );
   };
 
+  const renderMatchDetails = (match: any) => {
+    const categories = match.categories || [];
+    const maxRounds = match.rounds || 1;
+    
+    // Sort players by points in this match
+    const sortedMatchPlayers = [...match.players].sort((a: any, b: any) => (b.points || 0) - (a.points || 0));
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '1.2rem', animation: 'fadeIn 0.3s ease-out' }}>
+        {/* Back Button */}
+        <button
+          type="button"
+          className="btn btn-secondary"
+          onClick={() => {
+            audioHelper.playClick();
+            setSelectedMatch(null);
+            setSelectedRound(1);
+          }}
+          style={{
+            alignSelf: 'flex-start',
+            padding: '0.4rem 0.8rem',
+            fontSize: '0.8rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: '0.3rem',
+            height: 'auto'
+          }}
+        >
+          ← Zurück
+        </button>
+
+        {/* Match Header */}
+        <div style={{ borderBottom: '1px solid var(--border-glass)', paddingBottom: '0.6rem' }}>
+          <h3 style={{ fontSize: '1.2rem', color: 'var(--accent)', fontWeight: 800 }}>
+            Raum #{match.code} - Details
+          </h3>
+          <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>
+            Gespielt am {formatDate(match.ended_at)} | {maxRounds} Runden
+          </span>
+        </div>
+
+        {/* Final Standings Summary */}
+        <div style={{
+          background: 'rgba(255, 255, 255, 0.02)',
+          border: '1px solid var(--border-glass)',
+          borderRadius: 'var(--radius-md)',
+          padding: '0.8rem',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '0.5rem'
+        }}>
+          <h4 style={{ fontSize: '0.85rem', color: 'var(--text-main)', fontWeight: 700, borderBottom: '1px solid rgba(255, 255, 255, 0.05)', paddingBottom: '0.3rem' }}>
+            🏆 Endplatzierung
+          </h4>
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+            {sortedMatchPlayers.map((p: any, idx: number) => (
+              <div key={idx} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '0.8rem', padding: '0.1rem 0' }}>
+                <span style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                  <span>{p.rank === 1 ? '🥇' : p.rank === 2 ? '🥈' : p.rank === 3 ? '🥉' : `${p.rank}.`}</span>
+                  <PlayerAvatar name={p.name} avatar={p.avatar} style={{ width: '20px', height: '20px', borderRadius: '50%', fontSize: '0.6rem' }} />
+                  <span>{p.name} {user && p.user_id === user.id ? ' (Ich)' : ''}</span>
+                </span>
+                <span style={{ fontWeight: 'bold', color: 'var(--accent)' }}>{p.points} Pkt.</span>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Round Selector Tab Pills */}
+        <div>
+          <label className="form-label" style={{ fontSize: '0.75rem', marginBottom: '0.4rem' }}>
+            Runde auswählen:
+          </label>
+          <div style={{ display: 'flex', gap: '0.3rem', flexWrap: 'wrap' }}>
+            {Array.from({ length: maxRounds }).map((_, i) => {
+              const rNum = i + 1;
+              const isActive = selectedRound === rNum;
+              
+              // Get the letter for this round from the first player who has it
+              const firstPlayerWithRound = match.players.find((p: any) => p.rounds && p.rounds[rNum]);
+              const roundLetter = firstPlayerWithRound?.rounds?.[rNum]?.letter || '';
+
+              return (
+                <button
+                  key={rNum}
+                  type="button"
+                  onClick={() => {
+                    audioHelper.playClick();
+                    setSelectedRound(rNum);
+                  }}
+                  className={`btn ${isActive ? 'btn-primary' : 'btn-secondary'}`}
+                  style={{
+                    padding: '0.4rem 0.8rem',
+                    fontSize: '0.75rem',
+                    borderRadius: 'var(--radius-sm)',
+                    height: 'auto'
+                  }}
+                >
+                  Runde {rNum} {roundLetter ? `("${roundLetter.toUpperCase()}")` : ''}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {/* Round Details Category List */}
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.8rem', maxHeight: '35vh', overflowY: 'auto', paddingRight: '0.2rem' }}>
+          {categories.map((cat: string) => {
+            return (
+              <div
+                key={cat}
+                style={{
+                  background: 'rgba(255, 255, 255, 0.01)',
+                  border: '1px solid var(--border-glass)',
+                  borderRadius: 'var(--radius-md)',
+                  padding: '0.8rem'
+                }}
+              >
+                {/* Category Header */}
+                <div style={{
+                  fontSize: '0.85rem',
+                  fontWeight: 700,
+                  color: 'var(--accent)',
+                  borderBottom: '1px solid rgba(255, 255, 255, 0.05)',
+                  paddingBottom: '0.3rem',
+                  marginBottom: '0.5rem'
+                }}>
+                  {cat}
+                </div>
+
+                {/* Answers list */}
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                  {match.players.map((p: any) => {
+                    const roundData = p.rounds?.[selectedRound];
+                    const ansText = roundData?.answers?.[cat] || '';
+                    const score = roundData?.points?.[cat] || 0;
+                    const hearts = roundData?.hearts?.[cat] || [];
+                    const usedJoker = roundData?.answers?._jokers?.split(',').map((s: string) => s.trim().toLowerCase()).includes(cat.toLowerCase());
+
+                    return (
+                      <div
+                        key={p.name}
+                        style={{
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                          fontSize: '0.8rem',
+                          background: 'rgba(0, 0, 0, 0.15)',
+                          padding: '0.4rem 0.6rem',
+                          borderRadius: 'var(--radius-sm)',
+                          border: '1px solid rgba(255, 255, 255, 0.02)'
+                        }}
+                      >
+                        <div style={{ display: 'flex', flexDirection: 'column' }}>
+                          <span style={{ fontWeight: 600, color: 'var(--text-muted)', fontSize: '0.7rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                            <PlayerAvatar name={p.name} avatar={p.avatar} style={{ width: '16px', height: '16px', borderRadius: '50%', fontSize: '0.55rem' }} />
+                            <span>{p.name} {user && p.user_id === user.id ? ' (Ich)' : ''}</span>
+                          </span>
+                          <span style={{
+                            color: ansText ? 'var(--text-main)' : 'rgba(255, 255, 255, 0.2)',
+                            fontStyle: ansText ? 'normal' : 'italic',
+                            fontSize: '0.8rem',
+                            marginTop: '0.1rem',
+                            display: 'flex',
+                            alignItems: 'center',
+                            gap: '0.3rem'
+                          }}>
+                            {ansText || 'Keine Antwort'}
+                            {usedJoker && (
+                              <span style={{ fontSize: '0.65rem', color: 'var(--accent)', fontWeight: 'bold' }}>
+                                🃏 Joker
+                              </span>
+                            )}
+                          </span>
+                        </div>
+
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                          {hearts.length > 0 && (
+                            <span style={{ color: 'var(--secondary)', display: 'inline-flex', alignItems: 'center', fontSize: '0.7rem', gap: '0.1rem' }}>
+                              ❤️ {hearts.length}
+                            </span>
+                          )}
+                          <span style={{
+                            fontWeight: 'bold',
+                            color: score === 20 ? 'var(--accent)' : score >= 10 ? 'var(--success)' : score === 5 ? 'var(--warning)' : 'var(--text-muted)'
+                          }}>
+                            +{score}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    );
+  };
+
   const renderHistoryDashboard = () => {
     if (historyLoading) {
       return <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Lade Spielverlauf...</div>;
@@ -481,6 +930,10 @@ export function LandingPage({
 
     if (historyList.length === 0) {
       return <div style={{ textAlign: 'center', padding: '2rem', color: 'var(--text-muted)' }}>Noch keine Spiele absolviert.</div>;
+    }
+
+    if (selectedMatch) {
+      return renderMatchDetails(selectedMatch);
     }
 
     return (
@@ -492,6 +945,11 @@ export function LandingPage({
           return (
             <div
               key={match.id}
+              onClick={() => {
+                audioHelper.playClick();
+                setSelectedMatch(match);
+                setSelectedRound(1);
+              }}
               style={{
                 background: 'rgba(255, 255, 255, 0.02)',
                 border: `1px solid ${isWinner ? 'var(--success)' : 'var(--border-glass)'}`,
@@ -499,6 +957,18 @@ export function LandingPage({
                 padding: '0.8rem',
                 position: 'relative',
                 boxShadow: isWinner ? '0 0 10px var(--success-glow)' : 'none',
+                cursor: 'pointer',
+                transition: 'transform 0.2s ease, border-color 0.2s ease, background-color 0.2s ease',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.transform = 'translateY(-2px)';
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.04)';
+                e.currentTarget.style.borderColor = isWinner ? 'var(--success)' : 'rgba(255, 255, 255, 0.15)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.transform = 'translateY(0)';
+                e.currentTarget.style.backgroundColor = 'rgba(255, 255, 255, 0.02)';
+                e.currentTarget.style.borderColor = isWinner ? 'var(--success)' : 'var(--border-glass)';
               }}
             >
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.4rem' }}>
@@ -508,7 +978,7 @@ export function LandingPage({
                   padding: '0.15rem 0.4rem',
                   borderRadius: '1rem',
                   fontWeight: 700,
-                  background: isWinner ? 'var(--success-glow)' : 'rgba(255,255,255,0.05)',
+                  background: isWinner ? 'var(--success-glow)' : 'rgba(255, 255, 255, 0.05)',
                   color: isWinner ? 'var(--success)' : 'var(--text-muted)',
                   border: `1px solid ${isWinner ? 'var(--success)' : 'transparent'}`
                 }}>
@@ -530,7 +1000,11 @@ export function LandingPage({
                         fontWeight: p.user_id === user.id ? 700 : 400
                       }}
                     >
-                      <td style={{ padding: '0.15rem 0' }}>{p.rank}. {p.name}</td>
+                      <td style={{ padding: '0.15rem 0', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                        <span>{p.rank}.</span>
+                        <PlayerAvatar name={p.name} avatar={p.avatar} style={{ width: '16px', height: '16px', borderRadius: '50%', fontSize: '0.55rem' }} />
+                        <span>{p.name}</span>
+                      </td>
                       <td style={{ padding: '0.15rem 0', textAlign: 'right' }}>{p.points} Pkt.</td>
                     </tr>
                   ))}
@@ -589,28 +1063,12 @@ export function LandingPage({
                     {rank === 1 ? '🥇' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `${rank}`}
                   </td>
                   <td style={{ padding: '0.5rem 0.4rem', display: 'flex', alignItems: 'center', gap: '0.4rem', verticalAlign: 'middle' }}>
-                    {u.avatar ? (
-                      <img
-                        src={pb.files.getUrl(u, u.avatar)}
-                        alt="Avatar"
-                        style={{ width: '22px', height: '22px', borderRadius: '50%', objectFit: 'cover' }}
-                      />
-                    ) : (
-                      <div style={{
-                        width: '22px',
-                        height: '22px',
-                        borderRadius: '50%',
-                        background: 'var(--primary)',
-                        display: 'flex',
-                        alignItems: 'center',
-                        justifyContent: 'center',
-                        color: 'white',
-                        fontWeight: 'bold',
-                        fontSize: '0.65rem'
-                      }}>
-                        {(u.name || u.username || '?')[0].toUpperCase()}
-                      </div>
-                    )}
+                    <PlayerAvatar 
+                      name={u.name || u.username || '?'} 
+                      avatar={u.preset_avatar || u.avatar} 
+                      userId={u.id} 
+                      style={{ width: '22px', height: '22px', borderRadius: '50%', fontSize: '0.65rem' }} 
+                    />
                     <span style={{ textOverflow: 'ellipsis', overflow: 'hidden', whiteSpace: 'nowrap', maxWidth: '80px' }}>
                       {u.name || u.username}
                     </span>
@@ -647,14 +1105,21 @@ export function LandingPage({
             height: '100px',
             borderRadius: '50%',
             overflow: 'hidden',
-            border: '3px solid var(--primary)',
-            boxShadow: '0 0 20px var(--primary-glow)',
-            background: 'var(--bg-dark)',
+            boxShadow: '0 0 0 3px var(--primary), 0 0 20px var(--primary-glow)',
+            background: updatePreset ? AVATAR_PRESETS.find(p => p.id === updatePreset)?.gradient : 'var(--bg-dark)',
             position: 'relative'
           }}>
             {updateAvatarPreview ? (
               <img src={updateAvatarPreview} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
-            ) : user.avatar ? (
+            ) : updatePreset ? (
+              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.8rem' }}>
+                {AVATAR_PRESETS.find(p => p.id === updatePreset)?.emoji}
+              </div>
+            ) : user.preset_avatar && user.preset_avatar.startsWith('preset_') ? (
+              <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '2.8rem', background: AVATAR_PRESETS.find(p => p.id === user.preset_avatar)?.gradient || 'var(--primary)' }}>
+                {AVATAR_PRESETS.find(p => p.id === user.preset_avatar)?.emoji}
+              </div>
+            ) : user.avatar && !user.avatar.startsWith('preset_') ? (
               <img src={getAvatarSource(user)} alt="Avatar" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
             ) : (
               <div style={{ width: '100%', height: '100%', display: 'flex', alignItems: 'center', justifyContent: 'center', background: 'var(--primary)', color: 'white', fontSize: '2.5rem', fontWeight: 'bold' }}>
@@ -685,6 +1150,7 @@ export function LandingPage({
             onChange={(e) => {
               if (e.target.files && e.target.files.length > 0) {
                 setUpdateAvatar(e.target.files[0]);
+                setUpdatePreset(null);
               }
             }}
             style={{
@@ -713,6 +1179,13 @@ export function LandingPage({
             </div>
           )}
 
+          {/* Preset Avatar Selection Scroll */}
+          {renderPresetPicker(updatePreset, (id) => {
+            setUpdatePreset(id);
+            setUpdateAvatar(null);
+            setUpdateAvatarPreview(null);
+          })}
+
           <div style={{ display: 'flex', gap: '0.4rem', alignItems: 'center' }}>
             <input
               type="text"
@@ -724,7 +1197,7 @@ export function LandingPage({
               style={{ padding: '0.4rem 0.8rem', fontSize: '0.9rem', flex: 1 }}
               placeholder="Spielername"
             />
-            {(updateName !== (user.name || '') || updateAvatar) && (
+            {(updateName !== (user.name || '') || updateAvatar || updatePreset !== (user.preset_avatar && user.preset_avatar.startsWith('preset_') ? user.preset_avatar : null)) && (
               <button
                 type="submit"
                 disabled={updateLoading}
@@ -739,6 +1212,58 @@ export function LandingPage({
             {user.email}
           </span>
         </form>
+
+        {/* Theme Selector inside Profile Card */}
+        <div style={{ 
+          width: '100%',
+          background: 'rgba(255, 255, 255, 0.01)', 
+          border: '1px solid var(--border-glass)', 
+          padding: '0.8rem 1rem', 
+          borderRadius: 'var(--radius-md)',
+          marginTop: '0.2rem',
+          marginBottom: '0.2rem'
+        }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.5rem' }}>
+            <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.03em' }}>
+              🎨 FARBTHEMA
+            </div>
+            <div style={{ fontSize: '0.7rem', color: 'var(--accent)', fontWeight: 500 }}>
+              {THEMES.find(t => t.id === activeTheme)?.name || 'Sleek Dark'}
+            </div>
+          </div>
+          <div style={{ display: 'flex', gap: '0.4rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+            {THEMES.map((t) => {
+              const isActive = activeTheme === t.id;
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => {
+                    audioHelper.playClick();
+                    onUpdateTheme(t.id);
+                  }}
+                  title={t.name}
+                  style={{
+                    width: '26px',
+                    height: '26px',
+                    borderRadius: '50%',
+                    background: t.color,
+                    border: 'none',
+                    boxShadow: isActive 
+                      ? '0 0 0 2px white, 0 0 8px rgba(255,255,255,0.4)' 
+                      : '0 1px 5px rgba(0,0,0,0.25)',
+                    cursor: 'pointer',
+                    padding: 0,
+                    transition: 'all 0.2s ease',
+                    transform: isActive ? 'scale(1.15)' : 'scale(1)',
+                  }}
+                  onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.transform = 'scale(1.15)'; }}
+                  onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.transform = 'scale(1)'; }}
+                />
+              );
+            })}
+          </div>
+        </div>
 
         <button
           type="button"
@@ -793,7 +1318,9 @@ export function LandingPage({
   });
 
   return (
-    <div style={{ width: '100%', maxWidth: '900px', margin: '0 auto', padding: '0 0.5rem' }}>
+    <div style={{ width: '100%', maxWidth: '900px', margin: '0 auto', padding: '0 0.5rem', position: 'relative' }}>
+      
+
       
       {/* Dynamic Background Floating Letters */}
       <div style={{ position: 'fixed', top: 0, left: 0, right: 0, bottom: 0, pointerEvents: 'none', zIndex: -1, opacity: 0.05 }}>
@@ -853,9 +1380,6 @@ export function LandingPage({
         <h1 className="gradient-title" style={{ fontSize: '2.8rem', fontWeight: 900, letterSpacing: '-0.02em', margin: 0 }}>
           Stadt Land Fluss
         </h1>
-        <p className="subtitle" style={{ fontSize: '0.95rem', color: 'var(--text-muted)', marginTop: '0.2rem' }}>
-          Der multiplayer Klassiker im modernen Gewand
-        </p>
       </div>
 
       {error && (
@@ -890,18 +1414,44 @@ export function LandingPage({
               #{roomCode}
             </div>
 
-            <div className="form-group" style={{ textAlign: 'left', marginBottom: '1rem' }}>
-              <label className="form-label">Dein Spielername</label>
-              <input
-                type="text"
-                className="form-input"
-                value={name}
-                onChange={handleNameChange}
-                maxLength={10}
-                required
-                autoFocus
-              />
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem' }}>
+              {/* Selected Avatar Preview */}
+              <div 
+                onClick={() => {
+                  audioHelper.playClick();
+                  const randomPreset = AVATAR_PRESETS[Math.floor(Math.random() * AVATAR_PRESETS.length)];
+                  handlePresetSelect(randomPreset.id);
+                }}
+                title="Klicke für einen anderen zufälligen Avatar"
+                style={{
+                  cursor: 'pointer',
+                  transition: 'transform 0.2s ease',
+                }}
+                className="avatar-preview-clickable"
+              >
+                <PlayerAvatar 
+                  name={name || 'Gast'} 
+                  avatar={user ? (user.preset_avatar || user.avatar || undefined) : (selectedPreset || undefined)} 
+                  userId={user?.id}
+                  style={{ width: '60px', height: '60px', borderRadius: '50%', fontSize: '1.8rem', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }} 
+                />
+              </div>
+
+              <div className="form-group" style={{ flex: 1, margin: 0, textAlign: 'left' }}>
+                <label className="form-label">Dein Spielername</label>
+                <input
+                  type="text"
+                  className="form-input"
+                  value={name}
+                  onChange={handleNameChange}
+                  maxLength={10}
+                  required
+                  autoFocus
+                />
+              </div>
             </div>
+
+            {renderPresetPicker(selectedPreset, handlePresetSelect)}
 
             <button
               type="submit"
@@ -953,18 +1503,44 @@ export function LandingPage({
             <div style={{ padding: '2rem' }}>
               {authTab === 'guest' ? (
                 <div style={{ animation: 'fadeIn 0.3s ease-out' }}>
-                  <div className="form-group" style={{ marginBottom: '1.5rem' }}>
-                    <label className="form-label">Dein Spielername</label>
-                    <input
-                      type="text"
-                      className="form-input"
-                      value={name}
-                      onChange={handleNameChange}
-                      maxLength={10}
-                      required
-                      placeholder="z. B. GastSpieler"
-                    />
+                  <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1.5rem' }}>
+                    {/* Selected Avatar Preview */}
+                    <div 
+                      onClick={() => {
+                        audioHelper.playClick();
+                        const randomPreset = AVATAR_PRESETS[Math.floor(Math.random() * AVATAR_PRESETS.length)];
+                        handlePresetSelect(randomPreset.id);
+                      }}
+                      title="Klicke für einen anderen zufälligen Avatar"
+                      style={{
+                        cursor: 'pointer',
+                        transition: 'transform 0.2s ease',
+                      }}
+                      className="avatar-preview-clickable"
+                    >
+                      <PlayerAvatar 
+                        name={name || 'Gast'} 
+                        avatar={user ? (user.preset_avatar || user.avatar || undefined) : (selectedPreset || undefined)} 
+                        userId={user?.id}
+                        style={{ width: '60px', height: '60px', borderRadius: '50%', fontSize: '1.8rem', boxShadow: '0 4px 15px rgba(0,0,0,0.3)' }} 
+                      />
+                    </div>
+
+                    <div className="form-group" style={{ flex: 1, margin: 0, textAlign: 'left' }}>
+                      <label className="form-label">Dein Spielername</label>
+                      <input
+                        type="text"
+                        className="form-input"
+                        value={name}
+                        onChange={handleNameChange}
+                        maxLength={10}
+                        required
+                        placeholder="z. B. GastSpieler"
+                      />
+                    </div>
                   </div>
+
+                  {renderPresetPicker(selectedPreset, handlePresetSelect)}
 
                   <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '1.2rem' }}>
                     {/* Create Room */}
@@ -1015,6 +1591,57 @@ export function LandingPage({
                   </div>
                   <div style={{ textAlign: 'center', marginTop: '1.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                     Hinweis: Als Gast werden keine Statistiken oder Matchverläufe im Leaderboard erfasst.
+                  </div>
+
+                  {/* Theme Selector */}
+                  <div style={{ marginTop: '1.5rem' }}>
+                    <div style={{ 
+                      background: 'rgba(255, 255, 255, 0.02)',
+                      border: '1px solid var(--border-glass)',
+                      borderRadius: 'var(--radius-md)',
+                      padding: '1rem 1.2rem',
+                    }}>
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.7rem' }}>
+                        <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)', fontWeight: 600, letterSpacing: '0.04em' }}>
+                          🎨 FARBTHEMA
+                        </div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--accent)', fontWeight: 500 }}>
+                          {THEMES.find(t => t.id === activeTheme)?.name || 'Sleek Dark'}
+                        </div>
+                      </div>
+                      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap', justifyContent: 'center' }}>
+                        {THEMES.map((t) => {
+                          const isActive = activeTheme === t.id;
+                          return (
+                            <button
+                              key={t.id}
+                              type="button"
+                              onClick={() => {
+                                audioHelper.playClick();
+                                onUpdateTheme(t.id);
+                              }}
+                              title={t.name}
+                              style={{
+                                width: '32px',
+                                height: '32px',
+                                borderRadius: '50%',
+                                background: t.color,
+                                border: 'none',
+                                boxShadow: isActive 
+                                  ? '0 0 0 2.5px white, 0 0 12px rgba(255,255,255,0.45)' 
+                                  : '0 2px 8px rgba(0,0,0,0.3)',
+                                cursor: 'pointer',
+                                padding: 0,
+                                transition: 'all 0.2s ease',
+                                transform: isActive ? 'scale(1.15)' : 'scale(1)',
+                              }}
+                              onMouseEnter={(e) => { if (!isActive) e.currentTarget.style.transform = 'scale(1.15)'; }}
+                              onMouseLeave={(e) => { if (!isActive) e.currentTarget.style.transform = 'scale(1)'; }}
+                            />
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
               ) : (

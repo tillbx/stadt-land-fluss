@@ -35,6 +35,16 @@ function App() {
     login,
     logout,
     updateProfile,
+    updatePlayerAvatar,
+    activeTheme,
+    updateTheme,
+    messages,
+    sendChatMessage,
+    sendEmote,
+    kickPlayer,
+    jokersUsedCount,
+    useJoker,
+    setTypingStatus,
   } = useGameRoom();
 
   // Scroll to top automatically when game phase/status changes
@@ -86,6 +96,8 @@ function App() {
             onLogin={login}
             onLogout={logout}
             onUpdateProfile={updateProfile}
+            activeTheme={activeTheme}
+            onUpdateTheme={updateTheme}
           />
         )}
 
@@ -98,6 +110,14 @@ function App() {
             onToggleReady={toggleReady}
             onStartRound={startRound}
             onLeaveRoom={leaveRoom}
+            onUpdatePlayerAvatar={updatePlayerAvatar}
+            activeTheme={activeTheme}
+            onUpdateTheme={updateTheme}
+            onKickPlayer={kickPlayer}
+            messages={messages}
+            onSendChatMessage={sendChatMessage}
+            onSendEmote={sendEmote}
+            onSetTypingStatus={setTypingStatus}
           />
         )}
 
@@ -118,6 +138,8 @@ function App() {
             onSubmitAnswers={submitAnswers}
             onTriggerStop={triggerStop}
             onForceEvaluate={forceEvaluate}
+            jokersUsedCount={jokersUsedCount}
+            onUseJoker={useJoker}
           />
         )}
 
@@ -130,6 +152,10 @@ function App() {
             onCastVote={castVote}
             onCastHeart={castHeart}
             onEvaluateRoundAndFinish={evaluateRoundAndFinish}
+            messages={messages}
+            onSendChatMessage={sendChatMessage}
+            onSendEmote={sendEmote}
+            onSetTypingStatus={setTypingStatus}
           />
         )}
 
@@ -142,6 +168,10 @@ function App() {
             onNextRound={nextRound}
             onRestartGame={handleRestartGame}
             onLeaveRoom={leaveRoom}
+            messages={messages}
+            onSendChatMessage={sendChatMessage}
+            onSendEmote={sendEmote}
+            onSetTypingStatus={setTypingStatus}
           />
         )}
       </main>

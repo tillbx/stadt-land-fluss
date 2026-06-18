@@ -55,12 +55,18 @@ migrate((db) => {
       {
         name: "categories",
         type: "json",
-        required: false
+        required: false,
+        options: {
+          maxSize: 2000000
+        }
       },
       {
         name: "players",
         type: "json",
-        required: true
+        required: true,
+        options: {
+          maxSize: 2000000
+        }
       },
       {
         name: "rounds",

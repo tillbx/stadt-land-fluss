@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from 'react';
 import { pb } from '../pocketbase';
+import { censorText } from '../utils/WordCensor';
+import { audioHelper } from '../utils/AudioHelper';
 
 export interface RoomSettings {
   categories: string[];
@@ -8,6 +10,11 @@ export interface RoomSettings {
   stopMode: 'instant' | 'countdown'; // countdown = 10s grace
   lettersPool: string[];
   validateFirstLetter?: boolean;
+  pointsHistory?: Record<number, Record<string, number>>;
+  roundsData?: Record<number, any>;
+  jokersEnabled?: boolean;
+  jokersCount?: number;
+  kickedPlayers?: Record<string, string>; // session_id -> kickedAt (ISO string)
 }
 
 export interface RoomRecord {
@@ -36,6 +43,8 @@ export interface PlayerRecord {
   user_id?: string;
   is_co_host?: boolean;
   avatar?: string;
+  is_kicked?: boolean;
+  is_typing?: boolean;
 }
 
 export interface AnswerRecord {
@@ -71,6 +80,25 @@ export function useGameRoom() {
   const [error, setError] = useState<string | null>(null);
   const [user, setUser] = useState<any>(pb.authStore.model);
   const [avatarMap, setAvatarMap] = useState<Record<string, string>>({});
+  const [messages, setMessages] = useState<any[]>([]);
+  const [jokersUsedCount, setJokersUsedCount] = useState(0);
+
+  useEffect(() => {
+    if (room?.id) {
+      setJokersUsedCount(Number(localStorage.getItem(`slf_jokers_used_count_${room.id}`) || '0'));
+    } else {
+      setJokersUsedCount(0);
+    }
+  }, [room?.id]);
+
+  const useJoker = () => {
+    if (!room) return;
+    const newCount = jokersUsedCount + 1;
+    localStorage.setItem(`slf_jokers_used_count_${room.id}`, String(newCount));
+    setJokersUsedCount(newCount);
+  };
+
+  const [activeTheme, setActiveTheme] = useState(() => localStorage.getItem('slf_theme') || 'default');
 
   useEffect(() => {
     setUser(pb.authStore.model);
@@ -79,6 +107,59 @@ export function useGameRoom() {
     });
     return () => unsubscribe();
   }, []);
+
+  // Apply theme and sync user profile on load and when user changes
+  useEffect(() => {
+    let theme = localStorage.getItem('slf_theme') || 'default';
+    if (user) {
+      const updates: Record<string, any> = {};
+      
+      // Theme sync
+      if (user.theme) {
+        theme = user.theme;
+        localStorage.setItem('slf_theme', theme);
+      } else {
+        updates.theme = theme;
+      }
+      
+      // Avatar sync
+      const savedAvatar = localStorage.getItem('slf_player_avatar');
+      if (!user.preset_avatar && !user.avatar && savedAvatar) {
+        updates.preset_avatar = savedAvatar;
+      }
+      
+      if (Object.keys(updates).length > 0) {
+        const syncProfile = async () => {
+          try {
+            const updated = await pb.collection('users').update(user.id, updates);
+            setUser(updated);
+          } catch (err) {
+            console.error('Failed to sync profile settings to Pocketbase:', err);
+          }
+        };
+        syncProfile();
+      }
+    }
+    document.documentElement.setAttribute('data-theme', theme);
+    setActiveTheme(theme);
+  }, [user]);
+
+  const updateTheme = async (themeName: string) => {
+    setActiveTheme(themeName);
+    document.documentElement.setAttribute('data-theme', themeName);
+    localStorage.setItem('slf_theme', themeName);
+    
+    if (pb.authStore.model) {
+      try {
+        const updated = await pb.collection('users').update(pb.authStore.model.id, {
+          theme: themeName,
+        });
+        setUser(updated);
+      } catch (err) {
+        console.error('Failed to save user theme:', err);
+      }
+    }
+  };
 
   // Load avatars dynamically for users
   useEffect(() => {
@@ -102,14 +183,15 @@ export function useGameRoom() {
         const filterString = missingUserIds.map((id) => `id = "${id}"`).join(' || ');
         const userRecords = await pb.collection('users').getFullList({
           filter: filterString,
-          fields: 'id,avatar',
+          fields: 'id,avatar,preset_avatar',
         });
         
         setAvatarMap((prev) => {
           const next = { ...prev };
-          userRecords.forEach((u) => {
-            if (u.avatar) {
-              next[u.id] = u.avatar;
+          userRecords.forEach((u: any) => {
+            const effective = u.preset_avatar || u.avatar;
+            if (effective) {
+              next[u.id] = effective;
             }
           });
           return next;
@@ -169,6 +251,45 @@ export function useGameRoom() {
     autoRejoin();
   }, []);
 
+  // 3. Update self user statistics on game finish (client-side per player)
+  useEffect(() => {
+    if (room && room.status === 'finished' && me && user && players.length > 0) {
+      const matchKey = `${room.id}_${(room.letters_used || []).join(',')}`;
+      const lastProcessed = localStorage.getItem('slf_last_processed_match');
+      if (lastProcessed !== matchKey) {
+        // Mark as processed immediately to prevent race conditions
+        localStorage.setItem('slf_last_processed_match', matchKey);
+        
+        const updateMyStats = async () => {
+          try {
+            const myPlayerRecord = players.find(p => p.id === me.id);
+            if (myPlayerRecord) {
+              const sorted = [...players].sort((a, b) => (b.points_total || 0) - (a.points_total || 0));
+              const rank = sorted.findIndex(p => p.id === me.id) + 1;
+              const isWinner = rank === 1;
+
+              const userRec = await pb.collection('users').getOne(user.id);
+              const pointsTotal = (userRec.points_total || 0) + (myPlayerRecord.points_total || 0);
+              const gamesTotal = (userRec.games_total || 0) + 1;
+              const winsTotal = (userRec.wins_total || 0) + (isWinner ? 1 : 0);
+
+              const updated = await pb.collection('users').update(user.id, {
+                points_total: pointsTotal,
+                games_total: gamesTotal,
+                wins_total: winsTotal
+              });
+              setUser(updated);
+              console.log('Successfully updated self stats on game finish:', user.id);
+            }
+          } catch (err) {
+            console.error('Failed to update self stats on game finish:', err);
+          }
+        };
+        updateMyStats();
+      }
+    }
+  }, [room?.status, me?.id, user?.id, players]);
+
   const roomRef = useRef<RoomRecord | null>(null);
   const playersRef = useRef<PlayerRecord[]>([]);
   const meRef = useRef<PlayerRecord | null>(null);
@@ -217,6 +338,15 @@ export function useGameRoom() {
         if (now - lastActiveTime > 25000) {
           try {
             console.log(`Deleting inactive player ${p.name}`);
+            
+            // Create leave system message
+            await pb.collection('messages').create({
+              room_id: roomRef.current.id,
+              player_name: p.name,
+              text: 'PLAYER_LEFT',
+              type: 'system',
+            });
+
             await pb.collection('players').delete(p.id);
           } catch (err) {
             console.error('Failed to prune inactive player:', err);
@@ -225,9 +355,64 @@ export function useGameRoom() {
       }
     }, 10000);
 
+    // Automatic Host Transfer check when host dies/disconnects
+    const hostCheckInterval = setInterval(async () => {
+      if (!roomRef.current || !meRef.current) return;
+      const currentHost = playersRef.current.find(p => p.id === roomRef.current?.host_id);
+      
+      if (!currentHost) {
+        // No host found or host deleted. Take over if we are next in line.
+        const activeOthers = playersRef.current.filter(p => !p.is_kicked);
+        if (activeOthers.length > 0) {
+          const sortedOthers = [...activeOthers].sort((a, b) => a.id.localeCompare(b.id));
+          if (sortedOthers[0].id === meRef.current.id) {
+            console.log("No host found. Claiming host role.");
+            try {
+              await pb.collection('players').update(meRef.current.id, { is_host: true, is_co_host: false });
+              await pb.collection('rooms').update(roomRef.current.id, { host_id: meRef.current.id });
+            } catch (err) {
+              console.warn("Failed to claim host:", err);
+            }
+          }
+        }
+        return;
+      }
+
+      // If the host is someone else and is dead (> 20s inactive)
+      if (currentHost.id !== meRef.current.id) {
+        const lastActiveTime = new Date(currentHost.last_active).getTime();
+        if (Date.now() - lastActiveTime > 20000) {
+          const activeOthers = playersRef.current.filter(p => p.id !== currentHost.id && !p.is_kicked);
+          if (activeOthers.length > 0) {
+            const coHost = activeOthers.find(p => p.is_co_host);
+            const candidate = coHost || [...activeOthers].sort((a, b) => a.id.localeCompare(b.id))[0];
+            if (candidate.id === meRef.current.id) {
+              console.log("Host is inactive. Taking over host role.");
+              try {
+                // Create leave system message for host
+                await pb.collection('messages').create({
+                  room_id: roomRef.current.id,
+                  player_name: currentHost.name,
+                  text: 'PLAYER_LEFT',
+                  type: 'system',
+                });
+
+                await pb.collection('players').delete(currentHost.id);
+                await pb.collection('players').update(meRef.current.id, { is_host: true, is_co_host: false });
+                await pb.collection('rooms').update(roomRef.current.id, { host_id: meRef.current.id });
+              } catch (err) {
+                console.warn("Failed to take over host:", err);
+              }
+            }
+          }
+        }
+      }
+    }, 5000);
+
     return () => {
       clearInterval(heartbeatInterval);
       clearInterval(cleanupInterval);
+      clearInterval(hostCheckInterval);
     };
   }, [me?.id, room?.id]);
 
@@ -266,6 +451,11 @@ export function useGameRoom() {
         // Update me record if it was us
         if (e.record.session_id === getSessionId()) {
           setMe(e.record as unknown as PlayerRecord);
+          // Client-side kicked listener: if is_kicked is true, trigger exit
+          if (e.record.is_kicked) {
+            leaveRoom();
+            setError('Du wurdest aus der Lobby gekickt.');
+          }
         }
       } else if (e.action === 'delete') {
         setPlayers((prev) => prev.filter((p) => p.id !== e.record.id));
@@ -293,12 +483,87 @@ export function useGameRoom() {
       }
     });
 
+    // Subscribe to Messages changes
+    pb.collection('messages').subscribe('*', (e) => {
+      if (e.action === 'create' || e.action === 'update') {
+        if (e.record.room_id !== roomId) return;
+        setMessages((prev) => {
+          const index = prev.findIndex((m) => m.id === e.record.id);
+          if (index > -1) {
+            const next = [...prev];
+            next[index] = e.record;
+            return next;
+          }
+          return [...prev, e.record];
+        });
+        
+        if (e.action === 'create') {
+          const isFromMe = e.record.player_id === meRef.current?.id || e.record.player_name === meRef.current?.name;
+          if (!isFromMe) {
+            if (e.record.type === 'chat') {
+              audioHelper.playMessage();
+            } else if (e.record.type === 'like') {
+              audioHelper.playLike();
+            } else if (e.record.type === 'system') {
+              if (e.record.text === 'PLAYER_JOINED') {
+                audioHelper.playJoin();
+              } else if (e.record.text === 'PLAYER_LEFT') {
+                audioHelper.playLeave();
+              }
+            }
+          }
+        }
+
+        if (e.record.type === 'emote' && e.action === 'create') {
+          // Dispatch custom window event
+          const event = new CustomEvent('slf_emote_received', {
+            detail: {
+              player_id: e.record.player_id,
+              player_name: e.record.player_name,
+              emoji: e.record.text,
+              avatar: e.record.avatar,
+            }
+          });
+          window.dispatchEvent(event);
+        }
+      } else if (e.action === 'delete') {
+        setMessages((prev) => prev.filter((m) => m.id !== e.record.id));
+      }
+    });
+
     return () => {
       pb.collection('rooms').unsubscribe(roomId);
       pb.collection('players').unsubscribe('*');
       pb.collection('answers').unsubscribe('*');
+      pb.collection('messages').unsubscribe('*');
     };
   }, [room?.id]);
+
+  // Auto-evaluation check when all players have submitted answers
+  useEffect(() => {
+    if (!room || room.status !== 'playing' || !me?.is_host) return;
+    if (players.length === 0) return;
+
+    const activePlayers = players.filter((p) => !p.is_kicked);
+    if (activePlayers.length === 0) return;
+
+    const allSubmitted = activePlayers.every((p) => {
+      const playerAns = answers.find(
+        (a) => a.player_id === p.id && a.round_num === room.current_round && a.is_submitted
+      );
+      return !!playerAns;
+    });
+
+    if (allSubmitted) {
+      console.log('All players finished! Transitioning immediately to evaluation (no cooldown).');
+      pb.collection('rooms').update(room.id, {
+        status: 'evaluating',
+        timer_ends_at: '',
+      }).catch((err) => {
+        console.error('Failed to transition to evaluation automatically:', err);
+      });
+    }
+  }, [room?.status, room?.current_round, players, answers, me?.is_host]);
 
   // Initial load helper for player list and answers inside a room
   const loadRoomData = async (roomId: string) => {
@@ -312,13 +577,19 @@ export function useGameRoom() {
         filter: `room_id = "${roomId}"`,
       });
       setAnswers(alist as unknown as AnswerRecord[]);
+
+      const mlist = await pb.collection('messages').getFullList({
+        filter: `room_id = "${roomId}"`,
+        sort: 'created',
+      });
+      setMessages(mlist);
     } catch (err) {
       console.error('Failed to load room details:', err);
     }
   };
 
   // Actions
-  const createRoom = async (playerName: string, customCategories?: string[]) => {
+  const createRoom = async (playerName: string, customCategories?: string[], avatar?: string) => {
     setIsConnecting(true);
     setError(null);
     try {
@@ -331,6 +602,8 @@ export function useGameRoom() {
         stopMode: 'countdown',
         lettersPool: DEFAULT_LETTERS,
         validateFirstLetter: true,
+        jokersEnabled: true,
+        jokersCount: 1,
       };
 
       // Generate unique 6-char room code
@@ -365,6 +638,10 @@ export function useGameRoom() {
         stop_triggered_by: '',
       });
 
+      const userAvatar = pb.authStore.model
+        ? (pb.authStore.model.preset_avatar || pb.authStore.model.avatar || '')
+        : (avatar || localStorage.getItem('slf_player_avatar') || '');
+
       // 2. Create Host Player
       const newPlayer = await pb.collection('players').create({
         room_id: newRoom.id,
@@ -375,11 +652,20 @@ export function useGameRoom() {
         last_active: new Date().toISOString(),
         session_id: sessionId,
         user_id: pb.authStore.model?.id || '',
+        avatar: userAvatar,
       });
 
       // 3. Bind Host to Room
       const updatedRoom = await pb.collection('rooms').update(newRoom.id, {
         host_id: newPlayer.id,
+      });
+
+      // 4. Create join system message
+      await pb.collection('messages').create({
+        room_id: newRoom.id,
+        player_name: playerName,
+        text: 'PLAYER_JOINED',
+        type: 'system',
       });
 
       setRoom(updatedRoom as unknown as RoomRecord);
@@ -392,7 +678,7 @@ export function useGameRoom() {
     }
   };
 
-  const joinRoom = async (roomCodeOrId: string, playerName: string) => {
+  const joinRoom = async (roomCodeOrId: string, playerName: string, avatar?: string) => {
     setIsConnecting(true);
     setError(null);
     try {
@@ -426,10 +712,26 @@ export function useGameRoom() {
 
       const roomId = targetRoom.id;
 
+      // Check if player is kicked/banned from this room (1 minute ban)
+      const kickedPlayers = targetRoom.settings?.kickedPlayers || {};
+      const kickedAtStr = kickedPlayers[sessionId];
+      if (kickedAtStr) {
+        const kickedAt = new Date(kickedAtStr).getTime();
+        const now = Date.now();
+        if (now - kickedAt < 60000) {
+          const remainingSeconds = Math.ceil((60000 - (now - kickedAt)) / 1000);
+          throw new Error(`Du wurdest aus dieser Lobby gekickt. Du kannst in ${remainingSeconds} Sekunden wieder beitreten.`);
+        }
+      }
+
       // Check if session ID already exists in this room (reconnect!)
       const existingPlayers = await pb.collection('players').getFullList({
         filter: `room_id = "${roomId}" && session_id = "${sessionId}"`,
       });
+
+      const userAvatar = pb.authStore.model
+        ? (pb.authStore.model.preset_avatar || pb.authStore.model.avatar || '')
+        : (avatar || localStorage.getItem('slf_player_avatar') || '');
 
       let playerRec: PlayerRecord;
       if (existingPlayers.length > 0) {
@@ -438,6 +740,7 @@ export function useGameRoom() {
           name: playerName, // Update name if changed
           last_active: new Date().toISOString(),
           user_id: pb.authStore.model?.id || '',
+          avatar: userAvatar || existingPlayers[0].avatar || '',
         })) as unknown as PlayerRecord;
       } else {
         // Create new player
@@ -450,7 +753,16 @@ export function useGameRoom() {
           last_active: new Date().toISOString(),
           session_id: sessionId,
           user_id: pb.authStore.model?.id || '',
+          avatar: userAvatar,
         })) as unknown as PlayerRecord;
+
+        // Create join system message
+        await pb.collection('messages').create({
+          room_id: roomId,
+          player_name: playerName,
+          text: 'PLAYER_JOINED',
+          type: 'system',
+        });
       }
 
       setRoom(targetRoom);
@@ -523,6 +835,10 @@ export function useGameRoom() {
         current_letter: letter,
         timer_ends_at: '',
         stop_triggered_by: '',
+        settings: {
+          ...room.settings,
+          pointsHistory: {}
+        }
       });
     } catch (err) {
       console.error('Failed to start round:', err);
@@ -661,6 +977,7 @@ export function useGameRoom() {
       if (!hearts[category]) hearts[category] = [];
 
       let updatedList = [...hearts[category]];
+      const isLiking = !updatedList.includes(voterId);
       if (updatedList.includes(voterId)) {
         updatedList = updatedList.filter((id) => id !== voterId);
       } else {
@@ -674,6 +991,24 @@ export function useGameRoom() {
       );
 
       await pb.collection('answers').update(answerId, { hearts });
+
+      // Create a system message in the chat when a player likes another's answer
+      if (isLiking && room) {
+        const voterName = players.find(p => p.id === voterId)?.name || 'Ein Mitspieler';
+        const targetName = players.find(p => p.id === answer.player_id)?.name || 'Ein Mitspieler';
+        const word = answer.answers[category] || '';
+        
+        await pb.collection('messages').create({
+          room_id: room.id,
+          player_name: voterName,
+          text: JSON.stringify({
+            target: targetName,
+            word,
+            category
+          }),
+          type: 'like',
+        });
+      }
     } catch (err) {
       console.error('Failed to toggle heart:', err);
     }
@@ -689,9 +1024,20 @@ export function useGameRoom() {
       // Calculate points locally first
       const updatedAnswers = answers.map((ans) => {
         const pointsMap: Record<string, number> = {};
+        
+        // Parse joker metadata
+        const jokersStr = ans.answers?.['_jokers'] || '';
+        const jokersList = jokersStr.split(',').map((s: string) => s.trim().toLowerCase());
 
         categories.forEach((cat) => {
-          const rawAnswer = (ans.answers[cat] || '').trim();
+          const rawAnswer = (ans.answers?.[cat] || '').trim();
+          const usedJoker = jokersList.includes(cat.toLowerCase());
+
+          // Joker scoring override: exactly 5 points, skips voting and duplicate penalties
+          if (usedJoker) {
+            pointsMap[cat] = 5;
+            return;
+          }
           
           // Basic validation check
           let isValid = rawAnswer.length > 0;
@@ -700,7 +1046,7 @@ export function useGameRoom() {
           }
 
           // Check community votes
-          const categoryVotes = ans.votes[cat] || {};
+          const categoryVotes = ans.votes?.[cat] || {};
           const yesVotes = Object.values(categoryVotes).filter((v) => v === true).length;
           const noVotes = Object.values(categoryVotes).filter((v) => v === false).length;
 
@@ -714,17 +1060,21 @@ export function useGameRoom() {
             return;
           }
 
-          // Count how many players wrote a valid answer in this category
+          // Count how many players wrote a valid answer in this category (excluding jokers)
           const normalizedVal = rawAnswer.toLowerCase();
           const allValidAnswersInCat = answers
             .map((a) => {
-              const otherRaw = (a.answers[cat] || '').trim();
-              const otherVotes = a.votes[cat] || {};
+              const otherRaw = (a.answers?.[cat] || '').trim();
+              const otherVotes = a.votes?.[cat] || {};
               const otherYes = Object.values(otherVotes).filter((v) => v === true).length;
               const otherNo = Object.values(otherVotes).filter((v) => v === false).length;
               
+              const otherJokersStr = a.answers?._jokers || '';
+              const isOtherJoker = otherJokersStr.split(',').map((s: string) => s.trim().toLowerCase()).includes(cat.toLowerCase());
+
               const isOtherValid =
                 otherRaw.length > 0 &&
+                !isOtherJoker && // exclude jokers from other players' uniqueness/duplicate counts
                 (!enforceFirstLetter || otherRaw[0].toLowerCase() === letter) &&
                 !(otherNo > otherYes);
 
@@ -748,7 +1098,7 @@ export function useGameRoom() {
           }
 
           // Add bonus points for hearts
-          const heartList = ans.hearts[cat] || [];
+          const heartList = ans.hearts?.[cat] || [];
           pointsMap[cat] += heartList.length; // +1 point per creativity heart
         });
 
@@ -762,12 +1112,14 @@ export function useGameRoom() {
 
       // Update answers in DB with calculated points
       for (const item of updatedAnswers) {
-        await pb.collection('answers').update(item.id, { points: item.points });
+        if (item) {
+          await pb.collection('answers').update(item.id, { points: item.points });
+        }
       }
 
       // Update players total scores
       for (const p of players) {
-        const roundReward = updatedAnswers.find((x) => x.playerId === p.id)?.totalPoints || 0;
+        const roundReward = updatedAnswers.find((x) => x?.playerId === p.id)?.totalPoints || 0;
         const newTotal = (p.points_total || 0) + roundReward;
         await pb.collection('players').update(p.id, {
           points_total: newTotal,
@@ -781,10 +1133,42 @@ export function useGameRoom() {
       // Check if max rounds reached
       const isFinished = room.current_round >= room.settings.maxRounds;
 
+      // Calculate points history
+      const history = room.settings.pointsHistory ? { ...room.settings.pointsHistory } : {};
+      const roundNum = room.current_round;
+      history[roundNum] = {};
+      players.forEach((p) => {
+        const roundReward = updatedAnswers.find((x) => x?.playerId === p.id)?.totalPoints || 0;
+        const newTotal = (p.points_total || 0) + roundReward;
+        history[roundNum][p.id] = newTotal;
+      });
+
+      // Accumulate round details (answers, points, votes, hearts) in room settings
+      const roundsData = room.settings.roundsData ? { ...room.settings.roundsData } : {};
+      roundsData[roundNum] = {
+        letter: room.current_letter,
+        playerAnswers: answers.map((ans) => {
+          const calculatedPoints = updatedAnswers.find((x) => x?.playerId === ans.player_id)?.points || {};
+          return {
+            player_id: ans.player_id,
+            answers: ans.answers || {},
+            points: calculatedPoints,
+            votes: ans.votes || {},
+            hearts: ans.hearts || {}
+          };
+        })
+      };
+
+      const updatedSettings = {
+        ...room.settings,
+        pointsHistory: history,
+        roundsData: roundsData
+      };
+
       if (isFinished) {
         try {
           const finalPlayersList = players.map(p => {
-            const roundReward = updatedAnswers.find((x) => x.playerId === p.id)?.totalPoints || 0;
+            const roundReward = updatedAnswers.find((x) => x?.playerId === p.id)?.totalPoints || 0;
             return {
               ...p,
               points_total: (p.points_total || 0) + roundReward
@@ -800,11 +1184,32 @@ export function useGameRoom() {
                 rank = sorted.indexOf(firstTied) + 1;
               }
             }
+
+            // Extract rounds history for this player from settings.roundsData
+            const playerRounds: Record<number, any> = {};
+            const rData = updatedSettings.roundsData || {};
+            Object.entries(rData).forEach(([roundNumStr, roundInfo]: [string, any]) => {
+              const rNum = Number(roundNumStr);
+              const playerAnswersList = roundInfo.playerAnswers || [];
+              const pAns = playerAnswersList.find((x: any) => x && x.player_id === p.id);
+              if (pAns) {
+                playerRounds[rNum] = {
+                  letter: roundInfo.letter,
+                  answers: pAns.answers || {},
+                  points: pAns.points || {},
+                  votes: pAns.votes || {},
+                  hearts: pAns.hearts || {}
+                };
+              }
+            });
+
             return {
               user_id: p.user_id || '',
               name: p.name,
+              avatar: p.avatar || '',
               points: p.points_total || 0,
-              rank
+              rank,
+              rounds: playerRounds
             };
           });
 
@@ -817,34 +1222,16 @@ export function useGameRoom() {
             ended_at: new Date().toISOString()
           });
 
-          // 2. Update user aggregates for registered players
-          for (const p of finalPlayersList) {
-            if (p.user_id) {
-              try {
-                const userRec = await pb.collection('users').getOne(p.user_id);
-                const pointsTotal = (userRec.points_total || 0) + (p.points_total || 0);
-                const gamesTotal = (userRec.games_total || 0) + 1;
-                const isWinner = playersData.find(pd => pd.user_id === p.user_id)?.rank === 1;
-                const winsTotal = (userRec.wins_total || 0) + (isWinner ? 1 : 0);
-
-                await pb.collection('users').update(p.user_id, {
-                  points_total: pointsTotal,
-                  games_total: gamesTotal,
-                  wins_total: winsTotal
-                });
-              } catch (userErr) {
-                console.error(`Failed to update statistics for user ${p.user_id}:`, userErr);
-              }
-            }
-          }
+          // 2. Client-side self updates are handled by individual players' clients
         } catch (historyErr) {
-          console.error('Failed to save match history or update statistics:', historyErr);
+          console.error('Failed to save match history:', historyErr);
         }
       }
 
       await pb.collection('rooms').update(room.id, {
         letters_used: updatedUsed,
         status: isFinished ? 'finished' : 'results',
+        settings: updatedSettings,
       });
     } catch (err) {
       console.error('Failed to run final round scoring evaluation:', err);
@@ -888,31 +1275,66 @@ export function useGameRoom() {
   };
 
   const leaveRoom = async () => {
-    if (me) {
+    const currentMe = meRef.current;
+    const currentRoom = roomRef.current;
+    if (currentMe && currentRoom) {
       try {
-        await pb.collection('players').delete(me.id);
+        // Create leave system message
+        await pb.collection('messages').create({
+          room_id: currentRoom.id,
+          player_name: currentMe.name,
+          text: 'PLAYER_LEFT',
+          type: 'system',
+        });
+
+        if (currentMe.is_host) {
+          // Transfer host role before deleting self
+          const otherPlayers = playersRef.current.filter((p) => p.id !== currentMe.id && !p.is_kicked);
+          if (otherPlayers.length > 0) {
+            const nextHost = otherPlayers.find((p) => p.is_co_host) || otherPlayers[0];
+            console.log(`Transferring host to ${nextHost.name}`);
+            await pb.collection('players').update(nextHost.id, {
+              is_host: true,
+              is_co_host: false,
+            });
+            await pb.collection('rooms').update(currentRoom.id, {
+              host_id: nextHost.id,
+            });
+          }
+        }
+        await pb.collection('players').delete(currentMe.id);
       } catch (err) {
-        console.warn('Failed to delete player on exit:', err);
+        console.warn('Failed to delete player or transfer host on exit:', err);
       }
     }
     setRoom(null);
     setPlayers([]);
     setMe(null);
     setAnswers([]);
+    setMessages([]);
   };
 
-  const register = async (email: string, password: string, displayName?: string, avatarFile?: File | null) => {
-    const formData = new FormData();
-    formData.append('email', email);
-    formData.append('password', password);
-    formData.append('passwordConfirm', password);
-    if (displayName) {
-      formData.append('name', displayName);
-    }
+  const register = async (email: string, password: string, displayName?: string, avatarFile?: File | null, presetAvatar?: string) => {
     if (avatarFile) {
+      const formData = new FormData();
+      formData.append('email', email);
+      formData.append('password', password);
+      formData.append('passwordConfirm', password);
+      if (displayName) {
+        formData.append('name', displayName);
+      }
       formData.append('avatar', avatarFile);
+      formData.append('preset_avatar', '');
+      await pb.collection('users').create(formData);
+    } else {
+      await pb.collection('users').create({
+        email,
+        password,
+        passwordConfirm: password,
+        name: displayName || '',
+        preset_avatar: presetAvatar || '',
+      });
     }
-    await pb.collection('users').create(formData);
     await pb.collection('users').authWithPassword(email, password);
   };
 
@@ -924,33 +1346,128 @@ export function useGameRoom() {
     pb.authStore.clear();
   };
 
-  const updateProfile = async (displayName: string, avatarFile: File | null) => {
+  const updateProfile = async (displayName: string, avatarFile: File | null, presetAvatar?: string) => {
     if (!pb.authStore.model) return;
-    const formData = new FormData();
-    formData.append('name', displayName);
+    let updated;
     if (avatarFile) {
+      const formData = new FormData();
+      formData.append('name', displayName);
       formData.append('avatar', avatarFile);
+      formData.append('preset_avatar', '');
+      updated = await pb.collection('users').update(pb.authStore.model.id, formData);
+    } else {
+      updated = await pb.collection('users').update(pb.authStore.model.id, {
+        name: displayName,
+        preset_avatar: presetAvatar || '',
+        avatar: presetAvatar ? null : undefined,
+      });
     }
-    const updated = await pb.collection('users').update(pb.authStore.model.id, formData);
     setUser(updated);
-    if (updated && updated.avatar) {
+    const effectiveAvatar = updated?.preset_avatar || updated?.avatar;
+    if (effectiveAvatar) {
       setAvatarMap((prev) => ({
         ...prev,
-        [updated.id]: updated.avatar,
+        [updated.id]: effectiveAvatar,
       }));
     }
     return updated;
   };
 
+  const updatePlayerAvatar = async (newAvatar: string) => {
+    if (!me) return;
+    try {
+      const updated = await pb.collection('players').update(me.id, {
+        avatar: newAvatar,
+      });
+      setMe(updated as unknown as PlayerRecord);
+
+      if (pb.authStore.model) {
+        const updatedUser = await pb.collection('users').update(pb.authStore.model.id, {
+          preset_avatar: newAvatar,
+          avatar: null,
+        });
+        setUser(updatedUser);
+      }
+      localStorage.setItem('slf_player_avatar', newAvatar);
+    } catch (err) {
+      console.error('Failed to update player avatar:', err);
+    }
+  };
+
+  const sendChatMessage = async (text: string) => {
+    if (!room || !me) return;
+    try {
+      const censored = censorText(text);
+      await pb.collection('messages').create({
+        room_id: room.id,
+        player_id: me.id,
+        player_name: me.name,
+        text: censored,
+        type: 'chat',
+        avatar: me.avatar || '',
+      });
+    } catch (err) {
+      console.error('Failed to send chat message:', err);
+    }
+  };
+
+  const sendEmote = async (emoji: string) => {
+    if (!room || !me) return;
+    try {
+      await pb.collection('messages').create({
+        room_id: room.id,
+        player_id: me.id,
+        player_name: me.name,
+        text: emoji,
+        type: 'emote',
+        avatar: me.avatar || '',
+      });
+    } catch (err) {
+      console.error('Failed to send emote:', err);
+    }
+  };
+
+  const kickPlayer = async (playerId: string) => {
+    if (!room || (!me?.is_host && !me?.is_co_host)) return;
+    try {
+      const targetPlayer = players.find(p => p.id === playerId);
+      if (targetPlayer) {
+        const kickedPlayers = { ...(room.settings?.kickedPlayers || {}) };
+        kickedPlayers[targetPlayer.session_id] = new Date().toISOString();
+        
+        // Update room settings to save the ban
+        await updateSettings({ kickedPlayers });
+      }
+
+      await pb.collection('players').update(playerId, {
+        is_kicked: true,
+      });
+    } catch (err) {
+      console.error('Failed to kick player:', err);
+    }
+  };
+
+  const setTypingStatus = async (isTyping: boolean) => {
+    if (!me) return;
+    if (me.is_typing === isTyping) return;
+    try {
+      await pb.collection('players').update(me.id, {
+        is_typing: isTyping,
+      });
+    } catch (err) {
+      console.warn('Failed to update typing status:', err);
+    }
+  };
+
   // Enrich players and me with avatar information
   const enrichedPlayers = players.map((p) => ({
     ...p,
-    avatar: p.user_id ? avatarMap[p.user_id] : undefined,
+    avatar: p.avatar || (p.user_id ? avatarMap[p.user_id] : undefined),
   }));
 
   const enrichedMe = me ? {
     ...me,
-    avatar: me.user_id ? avatarMap[me.user_id] : undefined,
+    avatar: me.avatar || (me.user_id ? avatarMap[me.user_id] : undefined),
   } : null;
 
   return {
@@ -979,5 +1496,15 @@ export function useGameRoom() {
     login,
     logout,
     updateProfile,
+    updatePlayerAvatar,
+    activeTheme,
+    updateTheme,
+    messages,
+    sendChatMessage,
+    sendEmote,
+    kickPlayer,
+    jokersUsedCount,
+    useJoker,
+    setTypingStatus,
   };
 }

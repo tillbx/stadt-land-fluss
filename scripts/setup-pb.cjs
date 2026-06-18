@@ -9,6 +9,22 @@ const zipPath = path.join(rootDir, 'pocketbase.zip');
 
 if (fs.existsSync(pbExePath)) {
   console.log('PocketBase executable already exists.');
+  // Auto-apply any pending migrations
+  try {
+    console.log('Running PocketBase migrations...');
+    const output = execSync(
+      `"${pbExePath}" migrate up --dir ./pb_data --migrationsDir ./pb_migrations`,
+      { cwd: rootDir, encoding: 'utf-8', stdio: 'pipe' }
+    );
+    if (output.trim()) {
+      console.log(output.trim());
+    } else {
+      console.log('All migrations already applied.');
+    }
+  } catch (err) {
+    // Migration errors are non-fatal (DB might be locked by running instance)
+    console.warn('Migration warning:', err.stderr || err.message);
+  }
   process.exit(0);
 }
 
