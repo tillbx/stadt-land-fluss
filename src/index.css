@@ -2248,15 +2248,19 @@ div::-webkit-scrollbar-thumb:hover {
 
 .eval-categories-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+  grid-template-columns: 1fr;
   gap: 1.5rem;
   width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
 }
 
 .results-breakdown-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(500px, 1fr));
+  grid-template-columns: 1fr;
   gap: 1.5rem;
   width: 100%;
+  max-width: 800px;
+  margin: 0 auto;
 }
 

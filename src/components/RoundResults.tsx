@@ -270,7 +270,6 @@ export function RoundResults({
   
   const isGameFinished = room.status === 'finished';
   const [showLeaveConfirm, setShowLeaveConfirm] = useState(false);
-  const [showAllLeaderboard, setShowAllLeaderboard] = useState(false);
 
   // Inject path animation styles once
   useEffect(() => {
@@ -514,7 +513,6 @@ export function RoundResults({
           </thead>
           <tbody>
             {sortedPlayers
-              .slice(0, showAllLeaderboard ? sortedPlayers.length : 3)
               .map((p, idx) => {
                 const rPoints = getRoundPoints(p.id);
                 const isWinner = isGameFinished && idx === 0;
@@ -551,19 +549,6 @@ export function RoundResults({
               })}
           </tbody>
         </table>
-
-        {sortedPlayers.length > 3 && (
-          <div style={{ display: 'flex', justifyContent: 'center', marginTop: '1rem' }}>
-            <button
-              className="btn btn-secondary"
-              style={{ fontSize: '0.85rem', padding: '0.5rem 1.2rem' }}
-              onClick={() => setShowAllLeaderboard(!showAllLeaderboard)}
-              type="button"
-            >
-              {showAllLeaderboard ? 'Weniger anzeigen' : 'Alle ansehen'}
-            </button>
-          </div>
-        )}
       </div>
 
       {/* Answer breakdown for the round */}
